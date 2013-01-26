@@ -163,14 +163,28 @@ static ssize_t tuna_otg_uart_switch_store(struct device *dev,
 					  struct device_attribute *attr,
 					  const char *buf, size_t size);
 
+
+static ssize_t tuna_otg_charge_switch_show(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t tuna_otg_charge_switch_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size);
+
+
 static DEVICE_ATTR(usb_sel, S_IRUSR | S_IWUSR,
 			tuna_otg_usb_sel_show, tuna_otg_usb_sel_store);
 static DEVICE_ATTR(uart_sel, S_IRUSR | S_IWUSR,
 			tuna_otg_uart_switch_show, tuna_otg_uart_switch_store);
 
+
+static DEVICE_ATTR(charge_sel, S_IRUSR | S_IWUSR, tuna_otg_charge_switch_show, tuna_otg_charge_switch_store);
+
+
 static struct attribute *manual_mode_attributes[] = {
 	&dev_attr_usb_sel.attr,
 	&dev_attr_uart_sel.attr,
+
+
+	&dev_attr_charge_sel.attr,
+
+
 	NULL,
 };
 
@@ -179,6 +193,10 @@ static const struct attribute_group manual_mode_group = {
 };
 
 static bool tuna_twl_chgctrl_init;
+
+
+static bool tuna_charge_mode;
+
 
 static void tuna_mux_usb(int state)
 {
@@ -260,29 +278,34 @@ static void tuna_vusb_enable(struct tuna_otg *tuna_otg, bool enable)
 
 static void tuna_set_vbus_drive(bool enable)
 {
-/* tmtmtm: prevent OTG host from switching to VBUS out,
-           so that host can be operated on external charge
-
+	printk("*** board-tuna-connector.tuna_set_vbus_drive(%i); tuna_charge_mode=%i\n", enable, tuna_charge_mode);
+	
 	if (enable) {
-		// Set the VBUS current limit to 500mA
-		twl_i2c_write_u8(TWL_MODULE_MAIN_CHARGE, 0x09,
-				CHARGERUSB_CINLIMIT);
-
-		// The TWL6030 has a feature to automatically turn on
-		// boost mode (VBUS Drive) when the ID signal is not
-		// grounded.  This feature needs to be disabled on Tuna
-		// as the ID signal is not hooked up to the TWL6030.
-		//
-		twl_i2c_write_u8(TWL_MODULE_MAIN_CHARGE, 0x21,
-				CHARGERUSB_CTRL3);
-		twl_i2c_write_u8(TWL_MODULE_MAIN_CHARGE, 0x40,
-				CHARGERUSB_CTRL1);
-	} else {
-		twl_i2c_write_u8(TWL_MODULE_MAIN_CHARGE, 0x01,
-				CHARGERUSB_CTRL3);
-		twl_i2c_write_u8(TWL_MODULE_MAIN_CHARGE, 0, CHARGERUSB_CTRL1);
+		
+	if (tuna_charge_mode) {
+		/* tmtmtm: prevent OTG host from switching to VBUS out, so that host can be operated on external charge */
+		printk("*** board-tuna-connector.tuna_set_vbus_drive(true) disabled! ***\n");
+		return;
 	}
+/*
+http://www.cjemicros.f2s.com/public/datasheets/TWL6030_Register_Map.pdf
+http://pdf1.alldatasheet.com/datasheet-pdf/view/420271/TI1/TWL6030/+321_8_VRh7auZxzAvt+/datasheet.pdf
 */
+		/* Set the VBUS current limit to 500mA */
+		twl_i2c_write_u8(TWL_MODULE_MAIN_CHARGE, 0x09, CHARGERUSB_CINLIMIT); /* 0000 1001: Current limitation value on VBUS input: 500 mA */
+
+		/* The TWL6030 has a feature to automatically turn on boost mode (VBUS Drive) when the ID signal is not grounded. This feature needs to be disabled on Tuna as the ID signal is not hooked up to the TWL6030. */
+		twl_i2c_write_u8(TWL_MODULE_MAIN_CHARGE, 0x21, CHARGERUSB_CTRL3); /* 0010 0001: Set Q2 and Q3 current limit when in charging mode: 1.9 A
+		                                                                                Q1 is not forced
+		                                                                                ID line must be grounded to set de charger DC-DC converter in boost mode. Once started, boost can automatically be stopped if ID ground condition is not maintained: Boost stays ON */
+		twl_i2c_write_u8(TWL_MODULE_MAIN_CHARGE, 0x40, CHARGERUSB_CTRL1); /* 0100 0000: Disable charge current termination (default)
+		                                                                                USB charger is not in high-impedance mode on VBUS (default)
+		                                                                                Control the charger's DC-DC converter mode: Boost mode for OTG purpose, hardware protection is set to forbid the charge
+		                                                                                Allow to disable USB charger when USB is in suspend mode: No effect */
+	} else {
+		twl_i2c_write_u8(TWL_MODULE_MAIN_CHARGE, 0x01, CHARGERUSB_CTRL3); /* 0000 0001: ID line must be grounded to set de charger DC-DC converter in boost mode. Once started, boost can automatically be stopped if ID ground condition is not maintained: Boost is automatically stopped */
+		twl_i2c_write_u8(TWL_MODULE_MAIN_CHARGE, 0x00, CHARGERUSB_CTRL1); /* 0000 0000: Control the charger's DC-DC converter mode: Charger mode, the charge is authorized */
+	}
 }
 
 static void tuna_ap_usb_attach(struct tuna_otg *tuna_otg)
@@ -756,6 +779,17 @@ static ssize_t tuna_otg_uart_switch_store(struct device *dev,
 
 	return size;
 }
+
+
+static ssize_t tuna_otg_charge_switch_show(struct device *dev, struct device_attribute *attr, char *buf) {
+	return sprintf(buf, "%i\n", tuna_charge_mode);
+}
+
+static ssize_t tuna_otg_charge_switch_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size) {
+	tuna_charge_mode=!strncasecmp(buf, "1", 1);
+	return size;
+}
+
 
 static struct wake_lock sii9234_wake_lock;
 
